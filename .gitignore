@@ -1,0 +1,5 @@
+.env
+*.log
+db/
+files/
+redis/

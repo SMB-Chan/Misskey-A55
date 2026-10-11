@@ -1,0 +1,6 @@
+{
+  "name": "blurhash",
+  "version": "2.0.5-shim-fixed",
+  "description": "blurhash API returning a fixed placeholder (TS-233 tuning: skip pure-JS encode)",
+  "main": "index.js"
+}

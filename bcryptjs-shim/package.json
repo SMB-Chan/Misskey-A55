@@ -1,0 +1,6 @@
+{
+  "name": "bcryptjs",
+  "version": "3.0.3-shim-native",
+  "description": "bcryptjs API backed by native @node-rs/bcrypt (TS-233 tuning)",
+  "main": "index.js"
+}

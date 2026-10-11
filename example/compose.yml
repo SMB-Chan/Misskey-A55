@@ -1,0 +1,63 @@
+services:
+  web:
+    image: misskey/misskey:2026.10.0-a55
+    container_name: misskey-web
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+      - external_network
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=400
+    mem_limit: 768m
+    volumes:
+      - ./files:/misskey/files
+      - ./.config:/misskey/.config:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: misskey-redis
+    restart: always
+    networks:
+      - internal_network
+    volumes:
+      - ./redis:/data
+    healthcheck:
+      test: "redis-cli ping"
+      interval: 5s
+      retries: 20
+
+  db:
+    image: postgres:18-alpine
+    container_name: misskey-db
+    restart: always
+    networks:
+      - internal_network
+    env_file:
+      - .config/docker.env
+    volumes:
+      - ./db:/var/lib/postgresql
+    healthcheck:
+      test: "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+      interval: 5s
+      retries: 20
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: misskey-cloudflared
+    restart: always
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    networks:
+      - internal_network
+      - external_network
+    depends_on:
+      - web
+
+networks:
+  internal_network:
+    internal: true
+  external_network:
