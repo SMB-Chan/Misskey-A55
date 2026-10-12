@@ -7,6 +7,7 @@
  * which means the base image layout changed and the patch must be updated.
  */
 import { readdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const root = process.env.MISSKEY_ROOT ?? '/misskey';
@@ -18,6 +19,16 @@ const files = readdirSync(builtDir)
 	.filter((name) => name.endsWith('.js'))
 	.map((name) => join(builtDir, name));
 
+// Every chunk this script rewrites is syntax-checked before the build can
+// succeed. A single stray quote in a replacement turns the whole minified
+// line into a syntax error that only surfaces when the server boots (v2
+// shipped one once; this guard exists so it cannot happen again).
+const touched = new Set();
+function writeChecked(file, text) {
+	writeFileSync(file, text);
+	touched.add(file);
+}
+
 function replaceExact(from, to, min, max = min) {
 	let hits = 0;
 	let already = 0;
@@ -28,7 +39,7 @@ function replaceExact(from, to, min, max = min) {
 			if (src.includes(to)) already++;
 			continue;
 		}
-		writeFileSync(file, src.split(from).join(to));
+		writeChecked(file, src.split(from).join(to));
 		hits += count;
 	}
 	if (hits === 0 && already > 0) {
@@ -114,7 +125,7 @@ for (const file of frontFiles) {
 	if (!next.includes('/*A55_LOGIN_ONLY*/') || next.includes(widgetImport + widgetImportPatched)) {
 		throw new Error(`widget patch failed in ${file}`);
 	}
-	writeFileSync(file, next);
+	writeChecked(file, next);
 	widgetFiles++;
 	console.log(`patched widget: ${file.slice(FRONT_DIR.length)}`);
 }
@@ -145,7 +156,7 @@ for (const file of files) {
 	if (brace < 0 || end < 0 || end - idx > 160) throw new Error(`getBlurhash tail not found in ${file}`);
 	const close = end + tail.length;
 	const next = `${src.slice(0, brace + 1)}return ${JSON.stringify(BLURHASH)}/*A55_BLURHASH*/}${src.slice(close)}`;
-	writeFileSync(file, next);
+	writeChecked(file, next);
 	blurFiles++;
 	console.log(`patched blurhash: ${file}`);
 }
@@ -169,7 +180,7 @@ for (const file of files) {
 	if (!src.startsWith('import')) throw new Error(`bcrypt chunk is not an ESM module: ${file}`);
 	const next = `import{createRequire as __a55CreateRequire}from"node:module";${src.replace(bcryptObject, bcryptPatch)}`;
 	if (next === src || !next.includes(bcryptMarker)) throw new Error(`failed to patch bcrypt in ${file}`);
-	writeFileSync(file, next);
+	writeChecked(file, next);
 	bcryptFiles++;
 	bcryptWrote++;
 }
@@ -224,7 +235,7 @@ for (const pkgDir of sharpPackages) {
 			continue;
 		}
 		if (!src.includes('Sharp')) throw new Error(`unexpected sharp entry: ${file}`);
-		writeFileSync(file, src.replace(/\s*$/, '') + sharpTune);
+		writeChecked(file, src.replace(/\s*$/, '') + sharpTune);
 		sharpEntries++;
 		console.log(`patched sharp: ${file}`);
 	}
@@ -247,8 +258,18 @@ replaceExact(
 );
 replaceExact(
 	'let w=await this.fileInfoService.getFileInfo(t,{fileName:r,',
-	'let w' + linkMarker + ';if(l){const __u=String(f||h||``);const __m=__u.match(/[.](png|jpe?g|webp|gif|avif|svg|bmp|mp4|webm|mov|m4a|mp3|wav|ogg|opus|flac)([?#]|$)/i);const __t=__m?{jpg:`image/jpeg`,jpeg:`image/jpeg`,svg:`image/svg+xml`,mp4:`video/mp4`,webm:`video/webm`,mov:`video/quicktime`,m4a:`audio/mp4`,mp3:`audio/mpeg`,wav:`audio/wav`,ogg:`audio/ogg`,opus:`audio/opus`,flac:`audio/flac`}[__m[1].toLowerCase()]||`image/`+__m[1].toLowerCase():`application/octet-stream`;let __a=5381,__b=52711;for(const __c of __u){const __k=__c.codePointAt(0);__a=(Math.imul(__a,33)^__k)>>>0;__b=(Math.imul(__b,31)+__k)>>>0}w={size:0,md5:`a55${__a.toString(16).padStart(8,`0`)}${__b.toString(16).padStart(8,`0`)}`+`0`.repeat(13)`,type:__t,width:null,height:null,orientation:null,blurhash:' + JSON.stringify(BLURHASH) + ',sensitive:!1,porn:!1,warnings:[]}}else w=await this.fileInfoService.getFileInfo(t,{fileName:r,',
+	'let w' + linkMarker + ';if(l){const __u=String(f||h||``);const __m=__u.match(/[.](png|jpe?g|webp|gif|avif|svg|bmp|mp4|webm|mov|m4a|mp3|wav|ogg|opus|flac)([?#]|$)/i);let __ext=null,__mime=`application/octet-stream`;if(__m){__ext=__m[1].toLowerCase();__mime={jpg:`image/jpeg`,jpeg:`image/jpeg`,svg:`image/svg+xml`,mp4:`video/mp4`,webm:`video/webm`,mov:`video/quicktime`,m4a:`audio/mp4`,mp3:`audio/mpeg`,wav:`audio/wav`,ogg:`audio/ogg`,opus:`audio/opus`,flac:`audio/flac`}[__ext]||`image/`+__ext}let __a=5381,__b=52711;for(const __c of __u){const __k=__c.codePointAt(0);__a=(Math.imul(__a,33)^__k)>>>0;__b=(Math.imul(__b,31)+__k)>>>0}w={size:0,md5:`a55${__a.toString(16).padStart(8,`0`)}${__b.toString(16).padStart(8,`0`)}`+`0`.repeat(13),type:{ext:__ext,mime:__mime},width:null,height:null,orientation:null,blurhash:' + JSON.stringify(BLURHASH) + ',sensitive:!1,porn:!1,warnings:[]}}else w=await this.fileInfoService.getFileInfo(t,{fileName:r,',
 	1,
 );
+
+let checked = 0;
+for (const file of touched) {
+	const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+	if (res.status !== 0) {
+		throw new Error(`patched file failed syntax check: ${file}\n${(res.stderr || '').slice(0, 1500)}`);
+	}
+	checked++;
+}
+console.log(`syntax checked ${checked} patched file(s)`);
 
 console.log('A55 patch complete');
