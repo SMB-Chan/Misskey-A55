@@ -22,9 +22,15 @@ fulltextSearch:
 
 id: 'aidx'
 
-# --- Tuning for 2GB RAM / ARM 4-core ---
+# --- Tuning for 2GB RAM / Cortex-A55 x4 ---
+# These override the image fallbacks (deliver 2 / inbox 1).
 clusterLimit: 1
-deliverJobConcurrency: 16
-deliverJobPerSec: 16
-inboxJobConcurrency: 4
-inboxJobPerSec: 8
+threadPoolSize: 1
+deliverJobConcurrency: 2
+deliverJobPerSec: 4
+inboxJobConcurrency: 1
+inboxJobPerSec: 2
+relationshipJobConcurrency: 2
+relationshipJobPerSec: 4
+deliverJobMaxAttempts: 4
+inboxJobMaxAttempts: 4

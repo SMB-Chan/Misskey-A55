@@ -1,0 +1,17 @@
+# Paste into .config/default.yml.
+# The image already uses these numbers when the keys are omitted.
+# A value written here replaces the image fallback.
+
+clusterLimit: 1
+threadPoolSize: 1
+
+deliverJobConcurrency: 2
+inboxJobConcurrency: 1
+relationshipJobConcurrency: 2
+
+deliverJobPerSec: 4
+inboxJobPerSec: 2
+relationshipJobPerSec: 4
+
+deliverJobMaxAttempts: 4
+inboxJobMaxAttempts: 4

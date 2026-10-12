@@ -12,7 +12,7 @@ services:
       - internal_network
       - external_network
     environment:
-      - NODE_OPTIONS=--max-old-space-size=400
+      - NODE_OPTIONS=--max-old-space-size=400 --require /misskey/.config/a55-guard.cjs
     mem_limit: 768m
     volumes:
       - ./files:/misskey/files
@@ -24,6 +24,8 @@ services:
     restart: always
     networks:
       - internal_network
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    mem_limit: 96m
     volumes:
       - ./redis:/data
     healthcheck:
@@ -37,6 +39,21 @@ services:
     restart: always
     networks:
       - internal_network
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=20
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - idle_session_timeout=120s
+    mem_limit: 384m
     env_file:
       - .config/docker.env
     volumes:
