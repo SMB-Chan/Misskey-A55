@@ -60,6 +60,68 @@ replaceExact(
 	1,
 );
 
+// Server metrics (the "server metric" widget) are public when the control
+// panel publishes them: the serverStats stream channel and the server-info
+// endpoint both answer anonymous requests. Restrict both to logged-in users:
+// the channel flips to requireCredential, and the endpoint keeps the
+// credential-less shape but serves the placeholder payload unless the request
+// carries a user (the handler receives (params, user, ...) from exec).
+// Param names `_p`/`_u` must not collide with the handler's own `e`/`t`/`n`.
+replaceExact(
+	'chName=`serverStats`;static shouldShare=!0;static requireCredential=!1;',
+	'chName=`serverStats`;static shouldShare=!0;static requireCredential=!0;/*A55_LOGIN_ONLY*/',
+	1,
+);
+replaceExact(
+	'super(dN,fN,async()=>{if(!this.serverSettings.enableServerMachineStats)return{machine:`?`',
+	'super(dN,fN,async(_p,_u)=>{if(!(_u&&this.serverSettings.enableServerMachineStats))return{machine:`?`/*A55_LOGIN_ONLY*/',
+	1,
+);
+
+// The widget fetches its static labels (host, cpu model, memory total) with
+// misskeyApiGet, which never sends a token. With the endpoint gated above,
+// logged-in users would see `?` placeholders for those labels (the live
+// charts come from the stream and are fine). Give this one call a token:
+// import the account store next to apiGet and pass `i` in the query, the
+// same parameter the WebSocket uses. The chunk names below are the hashes of
+// the 2026.10.0 build and are identical across the per-language bundles.
+const FRONT_DIR = join(root, 'built', '_frontend_vite_');
+const frontFiles = [];
+(function walk(dir) {
+	for (const ent of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, ent.name);
+		if (ent.isDirectory()) walk(path);
+		else if (ent.name.endsWith('.js')) frontFiles.push(path);
+	}
+})(FRONT_DIR);
+
+const widgetImport = 'import{n as S}from"./2H3Dmt7WI-B6Yu8dpk.js";';
+const widgetImportPatched = 'import{n as S}from"./2H3Dmt7WI-B6Yu8dpk.js";import{t as __a55i}from"./2H3Dmt7WI-Bk39GnUG.js";/*A55_LOGIN_ONLY*/';
+const widgetCall = 'S(`server-info`,{})';
+const widgetCallPatched = 'S(`server-info`,__a55i?{i:__a55i.token}:{})';
+
+let widgetFiles = 0;
+for (const file of frontFiles) {
+	const src = readFileSync(file, 'utf8');
+	if (!src.includes(widgetCall)) {
+		if (src.includes('/*A55_LOGIN_ONLY*/')) widgetFiles++;
+		continue;
+	}
+	if (!src.includes(widgetImport)) throw new Error(`widget import line missing in ${file}`);
+	if (src.split(widgetCall).length !== 2) throw new Error(`widget call not unique in ${file}`);
+	let next = src.split(widgetCall).join(widgetCallPatched);
+	next = next.replace(widgetImport, widgetImportPatched);
+	if (!next.includes('/*A55_LOGIN_ONLY*/') || next.includes(widgetImport + widgetImportPatched)) {
+		throw new Error(`widget patch failed in ${file}`);
+	}
+	writeFileSync(file, next);
+	widgetFiles++;
+	console.log(`patched widget: ${file.slice(FRONT_DIR.length)}`);
+}
+if (widgetFiles < 20 || widgetFiles > 60) {
+	throw new Error(`expected 20..60 widget chunks, found ${widgetFiles}`);
+}
+
 // getBlurhash decodes the original file before the bundled encoder runs.
 const blurPipeline = '.raw().ensureAlpha().resize(64,64,{fit:`inside`}).toBuffer({resolveWithObject:!0})';
 let blurFiles = 0;
