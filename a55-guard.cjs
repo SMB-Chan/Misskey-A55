@@ -9,6 +9,10 @@
  * 監視は別スレッドで行う。ループが止まったら実行中ジョブを Redis の delayed へ退避し、
  * そのプロセスだけを SIGKILL する。終了したワーカーは Misskey 本体（entry.ts）が fork し直す。
  * アカウント削除のような重いジョブは受信キューより後ろに回る。
+ *
+ * v2: ストライク（同一ジョブの停滞回数）が 3 を超えたジョブは再試行させず破棄する。
+ * 起動時に a55:stall:* を走査して毒ジョブを一掃し、停滞・破棄は Redis の
+ * a55:events に記録する（SIGKILL で stderr が失われるため、事後解析はこちらで行う）。
  */
 
 const fs = require('node:fs');
@@ -19,6 +23,7 @@ const { Worker, isMainThread, parentPort, workerData } = require('node:worker_th
 const CONFIG_PATH = process.env.A55_GUARD_CONFIG || '/misskey/.config/default.yml';
 const STALL_MS = 45000;
 const GRACE_MS = 150000;
+const POISON_STRIKES = 3;
 
 function stripYaml(value) {
 	let text = String(value).replace(/\s+#.*$/, '').trim();
@@ -164,6 +169,24 @@ function redisExec(cfg, commands) {
 	});
 }
 
+function recordEvent(cfg, text) {
+	const line = new Date().toISOString() + ' ' + text;
+	return redisExec(cfg, [
+		['LPUSH', cfg.prefix + ':a55:events', line],
+		['LTRIM', cfg.prefix + ':a55:events', '0', '99'],
+	]).catch(() => {});
+}
+
+function dropJobCommands(base, id, activeKey, countKey) {
+	return [
+		['DEL', base + ':' + id],
+		['ZREM', base + ':delayed', id],
+		['LREM', activeKey, '0', id],
+		['DEL', base + ':' + id + ':lock'],
+		['DEL', countKey],
+	];
+}
+
 async function quarantine(cfg) {
 	let cursor = '0';
 	const keys = [];
@@ -177,6 +200,7 @@ async function quarantine(cfg) {
 	} while (cursor !== '0');
 
 	let moved = 0;
+	let dropped = 0;
 	for (const key of keys) {
 		if (!key.endsWith(':active')) continue;
 		const base = key.slice(0, -':active'.length);
@@ -187,6 +211,12 @@ async function quarantine(cfg) {
 			const countKey = cfg.prefix + ':a55:stall:' + base + ':' + id;
 			const countReply = await redisExec(cfg, [['INCR', countKey]]);
 			const count = Number(countReply[0]) || 1;
+			if (count >= POISON_STRIKES) {
+				await redisExec(cfg, dropJobCommands(base, id, key, countKey));
+				dropped++;
+				console.error('A55 guard: dropped poison job ' + id + ' (' + base + ') strikes=' + count);
+				continue;
+			}
 			const delay = Math.min(60 * 60 * 1000, 60 * 1000 * (2 ** (Math.min(count, 8) - 1)));
 			const score = String(Date.now() + delay);
 			await redisExec(cfg, [
@@ -199,7 +229,48 @@ async function quarantine(cfg) {
 			console.error('A55 guard: delayed ' + id + ' (' + base + ') ' + delay + 'ms');
 		}
 	}
-	return moved;
+	return { moved, dropped };
+}
+
+async function purgePoisonAtBoot(cfg) {
+	const head = cfg.prefix + ':a55:stall:';
+	let cursor = '0';
+	let dropped = 0;
+	do {
+		const reply = await redisExec(cfg, [['SCAN', cursor, 'MATCH', head + '*', 'COUNT', '200']]);
+		const page = reply[0];
+		if (page instanceof Error) throw page;
+		if (!Array.isArray(page) || page.length < 2) break;
+		cursor = String(page[0]);
+		for (const rawKey of page[1].map(String)) {
+			const rest = rawKey.slice(head.length);
+			const split = rest.lastIndexOf(':');
+			if (split < 0) continue;
+			const base = rest.slice(0, split);
+			const id = rest.slice(split + 1);
+			const countReply = await redisExec(cfg, [['GET', rawKey]]);
+			const count = Number(countReply[0]) || 0;
+			if (count < POISON_STRIKES) continue;
+			await redisExec(cfg, dropJobCommands(base, id, base + ':active', rawKey));
+			dropped++;
+			console.error('A55 guard: boot purge dropped ' + id + ' (' + base + ') strikes=' + count);
+		}
+	} while (cursor !== '0');
+	if (dropped > 0) await recordEvent(cfg, 'boot purge dropped ' + dropped + ' poison job(s)');
+	return dropped;
+}
+
+function kickBootPurge() {
+	let cfg;
+	try {
+		cfg = readRedisConfig(CONFIG_PATH);
+	} catch (err) {
+		console.error('A55 guard: boot purge config failed: ' + (err && err.message ? err.message : err));
+		return;
+	}
+	purgePoisonAtBoot(cfg).catch((err) => {
+		console.error('A55 guard: boot purge failed: ' + (err && err.message ? err.message : err));
+	});
 }
 
 let killing = false;
@@ -214,9 +285,11 @@ function quarantineThenKill(label) {
 		process.kill(process.pid, 'SIGKILL');
 		return;
 	}
-	quarantine(cfg).then((moved) => {
-		console.error('A55 guard: ' + label + ' stalled, delayed ' + moved + ' active job(s)');
-		process.kill(process.pid, 'SIGKILL');
+	quarantine(cfg).then((res) => {
+		console.error('A55 guard: ' + label + ' stalled, delayed ' + res.moved + ', dropped ' + res.dropped + ' active job(s)');
+		return recordEvent(cfg, label + ' stalled: delayed ' + res.moved + ', dropped ' + res.dropped).then(() => {
+			process.kill(process.pid, 'SIGKILL');
+		});
 	}, (err) => {
 		console.error('A55 guard: quarantine failed: ' + (err && err.message ? err.message : err));
 		process.kill(process.pid, 'SIGKILL');
@@ -263,6 +336,7 @@ function armWatch(label) {
 function armWorker() {
 	armWatch('worker');
 	console.error('A55 guard: worker armed');
+	kickBootPurge();
 }
 
 if (!isMainThread) {
@@ -297,5 +371,6 @@ if (!isMainThread) {
 	else if (cluster.isPrimary) {
 		armWatch('primary');
 		console.error('A55 guard: primary armed');
+		kickBootPurge();
 	}
 }

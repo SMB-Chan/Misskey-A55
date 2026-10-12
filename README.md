@@ -22,9 +22,47 @@ NAS 上の `docker build` で適用できます。
 | HTTP エージェント | 配送ソケットの下限を 256 から 8 にする |
 | サーバーメトリクス | 「サーバーメトリクス」ウィジェットのデータをログインユーザー限定にする。`serverStats` チャンネルを `requireCredential` 化し、`server-info` は匿名リクエストにプレースホルダ(`?`/`0`)を返す。ウィジェットのラベル取得(`misskeyApiGet`)だけトークン付きに書き換える |
 | ActivityPub | 応答の `max-age` を 30→300 秒、180→1800 秒にする。HTML の外枠と WebFinger も同じ秒数になる。`300` と `31536000` は変えない。Cloudflare の Cache Rule がこれを尊重するとクローラが NAS に届かない |
-| 連合先の表示 | NodeInfo のバージョンを `2026.10.0-A55` にする。名前は `misskey` のままなので、相手の画面は `misskey 2026.10.0-A55` になる |
+| 連合先の表示 | NodeInfo のバージョンを `2026.10.0-A55.2` にする。名前は `misskey` のままなので、相手の画面は `misskey 2026.10.0-A55.2` になる |
+| リモート媒体（v2） | `uploadFromUrl` のリンク（`isLink`）経路でダウンロード自体をやめ、URL からファイル名・種別・md5 代用値を合成する。既知の URI は DB 参照だけで返す。ローカル投稿と既存キャッシュは従来どおり |
+| jemalloc（v2） | `MALLOC_CONF=dirty_decay_ms:5000,muzzy_decay_ms:5000,narenas:2`。解放済みページの残留を減らし、768MB 制限の cgroup 圧迫を下げる |
 
 プレースホルダは中性色の固定 blurhash です。投稿画像のぼかしプレビューの色は元画像を反映しません。
+
+## リモート媒体のリンクスルー（v2）
+
+2026-10-12 の夜間、連合ピークでワーカーが 195 秒周期（ガードの猶予 150 秒 + 停滞判定 45 秒）
+で停止・再 fork を繰り返した事件の原因は、`cacheRemoteFiles` / `cacheRemoteSensitiveFiles` /
+`proxyRemoteFiles` が全部オンで、misskey.io 等から流れる画像を**毎回 NAS がダウンロードして
+sharp でサムネイル生成**していたことでした（このときの DB 状態: リモート由来 2,776 件・3.2GB）。
+
+v2 は運用を「リンクスルー」に切り替えます。DB の `meta` で次の 3 フラグを false にすると、
+新しいリモートファイルは `isLink` で登録され、sharp もサムネイルも走りません。
+
+```sql
+update meta set "cacheRemoteFiles" = false, "proxyRemoteFiles" = false,
+                 "cacheRemoteSensitiveFiles" = false;
+```
+
+`patch-built.mjs` はそのリンク経路からさらにネットワーク取得を消します:
+
+- **既知 URI の高速返却**: `uploadFromUrl` の先頭で `drive_file` を `uri` / `url` で検索し、
+  登録済みならダウンロードなしで返す。プロフィール更新（`Update(Person)`）の連打はここで
+  全部 DB ヒットになる
+- **リンクの完全スキップ**: `isLink` のとき `downloadUrl` を呼ばず、URL の拡張子から
+  `type` を、URL 文字列のハッシュから md5 代用値（`a55` + 16進 16 桁 + 0 埋め = 32 桁）を
+  合成する。`addFile` 側も `getFileInfo`（実ファイル読み取り）をリンク時にスキップする。
+  2つのパッチは組でバージョンされている —— 片方だけだと空の一時ファイルの md5
+  （`d41d8cd9...`）が全リンクファイルで同一になり、ハッシュ重複排除が誤ヒットする
+
+既存のキャッシュ済みファイル（webpublic/thumbnail 付き）はそのまま配信を続けます。
+ローカルユーザーのアップロードは従来どおりフルパイプラインで処理されます。
+
+トレードオフ: 新しいリモート画像は閲覧時に相手サーバー（misskey.io なら R2 の CDN）から
+直接読む。相手が消した画像は過去ノートで表示できなくなる。拡張子の無い URL は
+`application/octet-stream` になり、画像としてインライン表示されないことがある。
+
+ロールバックは 3 フラグを true に戻すだけ（即時・可逆。イメージの戻しもcompose の
+タグ変更のみ）。
 
 ## サーバーメトリクス（ログイン限定）
 
@@ -60,11 +98,11 @@ NAS 上の `docker build` で適用できます。
 
 ## 連合先への表示
 
-連合先は NodeInfo の `software.name` と `software.version` を並べて出します。名前は `misskey` 固定です。ここを変えると、相手がこのサーバーを Misskey として扱わなくなります。バージョンだけ `2026.10.0-A55` にします。
+連合先は NodeInfo の `software.name` と `software.version` を並べて出します。名前は `misskey` 固定です。ここを変えると、相手がこのサーバーを Misskey として扱わなくなります。バージョンだけ `2026.10.0-A55.2` にします。
 
-サーバーは起動時に `/misskey/built/meta.json` を読み、NodeInfo と `/api/meta` と送信時の User-Agent（`Misskey/2026.10.0-A55 (サイトのURL)`）に使います。フロントエンドに焼き込まれた版は `2026.10.0` のままです。概要ページと、言語ファイルの URL は変わりません。
+サーバーは起動時に `/misskey/built/meta.json` を読み、NodeInfo と `/api/meta` と送信時の User-Agent（`Misskey/2026.10.0-A55.2 (サイトのURL)`）に使います。フロントエンドに焼き込まれた版は `2026.10.0` のままです。概要ページと、言語ファイルの URL は変わりません。
 
-`2026.10.0-A55` は semver のプレリリースで、比較すると `2026.10.0` より前になります。Misskey は相手のバージョン文字列では機能を切り替えません。配送を止めるのは、管理画面で指定したソフトとバージョン範囲に一致したときだけです。
+`2026.10.0-A55.2` は semver のプレリリースで、比較すると `2026.10.0` より前になります。Misskey は相手のバージョン文字列では機能を切り替えません。配送を止めるのは、管理画面で指定したソフトとバージョン範囲に一致したときだけです。
 
 相手は NodeInfo をキャッシュします。表示が切り替わるのは、相手が次に取りに来たあとです。
 
@@ -86,9 +124,9 @@ TS-233 上でビルドしてください。`@node-rs/bcrypt` のネイティブ�
 
 ```sh
 cd Misskey-A55
-sudo docker build -t misskey/misskey:2026.10.0-a55 .
+sudo docker build -t misskey/misskey:2026.10.0-a55v2 .
 
-# docker-compose で image: misskey/misskey:2026.10.0-a55 を指定して up
+# docker-compose で image: misskey/misskey:2026.10.0-a55v2 を指定して up
 ```
 
 `example/` に Misskey + PostgreSQL 18 + Redis 7 + cloudflared のテンプレートがあります。`.config` 内のパスワードは自分のものに書き換えてください。
@@ -100,6 +138,20 @@ Misskey はマスタープロセスが HTTP を出し、ワーカー 1 本が受
 ループが同期処理で止まると、ノートの受信も配送もそこで止まります。PostgreSQL から見ると接続は `idle` / `ClientRead` のまま残り、Docker のヘルスチェックはマスターの HTTP が応答するので成功します。`entry.ts` は終了したワーカーを fork し直します。止まっているだけで終了していないワーカーは、その対象になりません。
 
 `a55-guard.cjs` を `.config/` に置き、`NODE_OPTIONS` に `--require /misskey/.config/a55-guard.cjs` を足します。起動から 150 秒は起動処理を見送り、その後は別スレッドがイベントループの心拍を見ます。45 秒止まったら、実行中のジョブを Redis の delayed へ退避してから、そのプロセスだけを止めます。Misskey がワーカーを fork し直すので HTTP は続き、受信キューが先に流れます。同じジョブが再び止めた場合は待ち時間を倍にして、最大 1 時間まで後ろへ回します。マスター自身が止まったときはそのプロセスを止め、Docker の再起動に任せます。
+
+v2 の追加:
+
+- **毒ジョブの断裁**: 同じジョブの停滞が 3 回（`POISON_STRIKES`）に達したら退避せず
+  破棄する（ジョブ本体・delayed・lock を削除）。再試行のたびにワーカーを殺す
+  再犯ジョブ（実測では inbox 1 件が 41 回）を恒久的に排除する
+- **起動時スイープ**: プロセス起動時に `a55:stall:*` を走査し、ストライク 3 以上の
+  ジョブを一掃する。滞留バックログが次回起動で自動解消される
+- **イベント履歴**: 停滞・断裁・スイープの結果を `<prefix>:a55:events`（最新 100 件）に
+  記録する。SIGKILL で stderr が失われるため、事後解析はこちらで行う
+
+```sh
+docker exec misskey-redis redis-cli lrange smb-chan.dev:a55:events 0 -1   # 履歴を見る
+```
 
 あわせてデータベースに `idle_session_timeout=120s` を置きます。結果を読み捨てた接続は、ループが生きていれば 2 分で切れ、ジョブがエラーになって次へ進みます。
 

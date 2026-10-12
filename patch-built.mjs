@@ -231,4 +231,24 @@ for (const pkgDir of sharpPackages) {
 }
 if (sharpEntries < 1) throw new Error('no sharp entry file was patched');
 
+// Remote media link-through. The stock build downloads every remote file in
+// uploadFromUrl even when the record will be isLink (no thumbnail, no
+// webpublic, size 0), and runs getFileInfo on the temp file for md5/type.
+// Two coordinated edits remove the network fetch and the file read for the
+// link path only; local uploads and already-cached remote files keep the
+// full pipeline. Without the second edit the first would feed addFile an
+// empty temp file whose md5 (d41d8cd9...) would collide across every link
+// file and break hash dedupe, so they are versioned as a pair.
+const linkMarker = '/*A55_LINK*/';
+replaceExact(
+	'try{let{filename:y}=await this.downloadService.downloadUrl(e,v);f!==null&&y===f&&(f=null);',
+	'try{let y' + linkMarker + ';if(l){try{const __d=await this.driveFilesRepository.findOneBy({uri:e})??await this.driveFilesRepository.findOneBy({url:e});if(__d)return this.downloaderLogger.succ(`a55 dup: ${__d.id}`),__d}catch(__de){}y=(e.split(`/`).pop()||``).split(/[?#]/)[0].slice(0,180);try{y=decodeURIComponent(y)}catch(__de2){}y=y||`file`}else{let __r=await this.downloadService.downloadUrl(e,v);y=__r.filename}f!==null&&y===f&&(f=null);',
+	1,
+);
+replaceExact(
+	'let w=await this.fileInfoService.getFileInfo(t,{fileName:r,',
+	'let w' + linkMarker + ';if(l){const __u=String(f||h||``);const __m=__u.match(/[.](png|jpe?g|webp|gif|avif|svg|bmp|mp4|webm|mov|m4a|mp3|wav|ogg|opus|flac)([?#]|$)/i);const __t=__m?{jpg:`image/jpeg`,jpeg:`image/jpeg`,svg:`image/svg+xml`,mp4:`video/mp4`,webm:`video/webm`,mov:`video/quicktime`,m4a:`audio/mp4`,mp3:`audio/mpeg`,wav:`audio/wav`,ogg:`audio/ogg`,opus:`audio/opus`,flac:`audio/flac`}[__m[1].toLowerCase()]||`image/`+__m[1].toLowerCase():`application/octet-stream`;let __a=5381,__b=52711;for(const __c of __u){const __k=__c.codePointAt(0);__a=(Math.imul(__a,33)^__k)>>>0;__b=(Math.imul(__b,31)+__k)>>>0}w={size:0,md5:`a55${__a.toString(16).padStart(8,`0`)}${__b.toString(16).padStart(8,`0`)}`+`0`.repeat(13)`,type:__t,width:null,height:null,orientation:null,blurhash:' + JSON.stringify(BLURHASH) + ',sensitive:!1,porn:!1,warnings:[]}}else w=await this.fileInfoService.getFileInfo(t,{fileName:r,',
+	1,
+);
+
 console.log('A55 patch complete');
