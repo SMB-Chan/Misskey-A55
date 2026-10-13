@@ -18,13 +18,22 @@ NAS 上の `docker build` で適用できます。
 | blurhash | `getBlurhash` が sharp で元画像を展開する前に固定プレースホルダを返す。アップロードとリモートファイル取り込みで libvips のデコードが走らない |
 | sharp | `cache(false)` と `concurrency(1)`。公式イメージは jemalloc を使うため、sharp は既定だと 4 スレッドと 50MB の操作キャッシュを持つ |
 | メモリキャッシュ | `MemoryKVCache` の件数上限を 2048 にする。公開鍵と絵文字は TTL が 12 時間で、件数の天井が無いとヒープが膨らむ。あふれた分は DB から読み直す |
-| ジョブ | 未設定時の並列を配送 2・受信 1・関係 2、レートを 4/秒・2/秒・4/秒、リトライを 4 回にする。`default.yml` に書いた値はこちらより優先される |
+| ジョブ | 未設定時の並列を配送 2・受信 1・関係 2、レートを 4/秒・2/秒・4/秒、リトライを 4 回にする。**`default.yml` の値はこちらより優先される**（v3 で本番の 16/4 を 2/1 に戻した） |
 | HTTP エージェント | 配送ソケットの下限を 256 から 8 にする |
 | サーバーメトリクス | 「サーバーメトリクス」ウィジェットのデータをログインユーザー限定にする。`serverStats` チャンネルを `requireCredential` 化し、`server-info` は匿名リクエストにプレースホルダ(`?`/`0`)を返す。ウィジェットのラベル取得(`misskeyApiGet`)だけトークン付きに書き換える |
 | ActivityPub | 応答の `max-age` を 30→300 秒、180→1800 秒にする。HTML の外枠と WebFinger も同じ秒数になる。`300` と `31536000` は変えない。Cloudflare の Cache Rule がこれを尊重するとクローラが NAS に届かない |
-| 連合先の表示 | NodeInfo のバージョンを `2026.10.0-A55.2` にする。名前は `misskey` のままなので、相手の画面は `misskey 2026.10.0-A55.2` になる |
+| 連合先の表示 | NodeInfo のバージョンを `2026.10.0-A55.4` にする。名前は `misskey` のままなので、相手の画面は `misskey 2026.10.0-A55.4` になる |
+| 未知アカウントの Delete（v2.1） | オブジェクトがアクター自身の URI（文字列でも埋め込みでも）で、そのユーザーが DB に無い Delete は取得も登録もしない。ノート削除は従来どおり |
+| アカウント削除（v2.1） | ノートは 20 件ずつ、ファイルは 8 件ずつ消し、チャンクの間に 40ms 空ける。リンク行は SQL 一括削除。実ファイルだけ `deleteFileSync` |
+| リンクの `/files/`（v2.1） | `isLink` のアクセスキーはリモート URI へ 302 する。種別判定のためのダウンロードをしない。キャッシュ済み実ファイルはそのまま配信 |
 | リモート媒体（v2） | `uploadFromUrl` のリンク（`isLink`）経路でダウンロード自体をやめ、URL からファイル名・種別・md5 代用値を合成する。既知の URI は DB 参照だけで返す。ローカル投稿と既存キャッシュは従来どおり |
 | jemalloc（v2） | `MALLOC_CONF=dirty_decay_ms:5000,muzzy_decay_ms:5000,narenas:2`。解放済みページの残留を減らし、768MB 制限の cgroup 圧迫を下げる |
+| ピン留め解決（v3） | リモートの `featured`（プロフィールピン）は取得しない。ピンは最大 5 ノート＋添付の再帰解決になるため、Person 更新から外す |
+| フォロー収集（v3） | `following` / `followers` コレクションの公開判定 HTTP をしない。プロフィール上は非公開扱い。フォロー自体は従来どおり |
+| インスタンス見た目（v3） | 連合先メタデータは NodeInfo だけ取る。HTML・manifest・favicon の HEAD はしない。ソフト名と版は残る |
+| Webhook 並列（v3） | ユーザー webhook 64→2、システム webhook 16→1。ジョブは同じイベントループ |
+| 外向き IPv4（v3） | `outgoingAddressFamily: ipv4` と `NODE_OPTIONS=--dns-result-order=ipv4first`。QNAP で死にがちな IPv6 待ちを避ける |
+| libuv（v3） | `UV_THREADPOOL_SIZE=2`。DNS/fs が 4 コアを postgres と取り合うのを抑える |
 
 プレースホルダは中性色の固定 blurhash です。投稿画像のぼかしプレビューの色は元画像を反映しません。
 
@@ -61,8 +70,74 @@ update meta set "cacheRemoteFiles" = false, "proxyRemoteFiles" = false,
 直接読む。相手が消した画像は過去ノートで表示できなくなる。拡張子の無い URL は
 `application/octet-stream` になり、画像としてインライン表示されないことがある。
 
-ロールバックは 3 フラグを true に戻すだけ（即時・可逆。イメージの戻しもcompose の
+ロールバックは 3 フラグを true に戻すだけ（即時・可逆。イメージの戻しも compose の
 タグ変更のみ）。
+
+## 薄い連合（v2.1）
+
+TS-233 は 4 コアの Cortex-A55 と 2GB で、そのうちコンテナに使えるのは約 1.25GB です。
+ワーカーは 1 本のままです。v2 で画像の sharp を止めたあとに残っていたのは、
+受信と同じループを止める仕事と、表示のたびに NAS が取りに行く経路です。
+
+- **知らないアカウントの Delete を捨てる**。Mastodon は `object` にアクター URI の
+  文字列を入れます。2026.10.0 の早期リターンは `object` がオブジェクトのときだけ
+  動くので、知らないユーザーを取得して登録し、直後に `deleteAccount` を積んでいました。
+  アクターとオブジェクトの URI が同じで DB にユーザーが無いときは、署名検証の前に戻します。
+  ローカルにいるユーザーの削除と、ノートの Delete はそのまま処理します。
+- **削除は少しずつ**。ノート 100 件の一括 `DELETE` と、ファイルごとのチャート更新が
+  CPU を埋め、ガードが 45 秒でプロセスを殺していました。殺されたジョブは先頭から
+  やり直すので、同じ削除が繰り返されます。20 件・8 件にして間でイベントループへ戻すと、
+  心拍と受信が続き、ジョブは最後まで走ります。`isLink` でディスクに無い行は
+  `DELETE` 一回です。ディスク上のファイル（v2 以前の 3.2GB を含む）は従来の削除です。
+  リンク行のチャートは更新しません。サイズ 0 なので使用量の判定には効きません。
+- **`/files/:key` のリンクは 302**。実体の無い行へのリクエストは、種別判定のために
+  相手から一度ダウンロードしていました（sharp は走りません）。ブラウザと連合先は
+  `Cache-Control: public, max-age=86400` 付きの 302 で相手の URL へ行きます。
+  ローカル投稿と、すでに保存してあるリモートファイルは今までどおり NAS から出ます。
+
+PostgreSQL は `jit=off` とパラレルクエリ無効です。重い `DELETE` の初回に JIT が
+4 コアを使うと、Node の心拍まで遅れます。データディレクトリはそのままです。
+
+```sh
+cd Misskey-A55
+sudo docker build -t misskey/misskey:2026.10.0-a55v2.1 .
+# compose の image を 2026.10.0-a55v2.1 にしてから
+cd ../misskey && sudo docker compose up -d db web
+```
+
+`db` の再作成はコマンド引数だけです。ボリュームは消しません。
+ロールバックは image を `2026.10.0-a55v2` に戻して `up -d web` です。
+Postgres の 2 フラグは v2 イメージでも有効なままにして構いません。
+
+## イベントループを空ける（v3）
+
+v2.1 のあとに残っていたのは、Person 更新の付き物と、本番 `default.yml` が
+パッチのジョブ上限を上書きしていたことです。`default.yml` の値はイメージの
+フォールバックより優先されます。TS-233 では配送 2 / 受信 1 のままにしてください。
+
+- **ピンとコレクションを取らない**。`Update(Person)` はアバター（リンク）とプロフィール文を
+  更新する。ピン留めノート 5 件の再帰解決と、following/followers の公開判定 GET はしない。
+  リモートユーザーのピンは空のままになることがある。フォロー・アンフォロー・ノートはそのまま。
+- **連合先の HTML を取らない**。NodeInfo だけ取ればソフト名と版は出る。トップページと
+  favicon は管理画面のインスタンス一覧の見た目だけに使う。
+- **IPv4 固定**。QNAP の IPv6 は応答しないことが多く、外向き GET がタイムアウトまで
+  イベントループを占有する。`outgoingAddressFamily: ipv4` は本流の設定項目。
+- **リモートチャートと URL プレビューを止める**（`example/v3-meta.sql`）。
+  ノート1件ごとの per-user / instance チャート書き込みと、リンクカード用の HTML 取得は
+  プロトコルに不要。管理画面からいつでも戻せる。
+- **Postgres**: `autovacuum_max_workers=1`, `wal_compression=on`,
+  `idle_in_transaction_session_timeout=30s`。WAL を小さくし、止まったトランザクションを切る。
+
+```sh
+cd Misskey-A55
+sudo docker build -t misskey/misskey:2026.10.0-a55v3 .
+# compose の image を 2026.10.0-a55v3 にしてから
+cd ../misskey && sudo docker compose up -d db web
+sudo docker exec -i misskey-db psql -U misskey -d misskey < example/v3-meta.sql
+```
+
+ロールバックは image を `2026.10.0-a55v2.1` に戻して `up -d web`。meta の 4 フラグは
+true に戻せばチャートとプレビューが復活する。
 
 ## サーバーメトリクス（ログイン限定）
 
@@ -98,11 +173,11 @@ update meta set "cacheRemoteFiles" = false, "proxyRemoteFiles" = false,
 
 ## 連合先への表示
 
-連合先は NodeInfo の `software.name` と `software.version` を並べて出します。名前は `misskey` 固定です。ここを変えると、相手がこのサーバーを Misskey として扱わなくなります。バージョンだけ `2026.10.0-A55.2` にします。
+連合先は NodeInfo の `software.name` と `software.version` を並べて出します。名前は `misskey` 固定です。ここを変えると、相手がこのサーバーを Misskey として扱わなくなります。バージョンだけ `2026.10.0-A55.4` にします。
 
-サーバーは起動時に `/misskey/built/meta.json` を読み、NodeInfo と `/api/meta` と送信時の User-Agent（`Misskey/2026.10.0-A55.2 (サイトのURL)`）に使います。フロントエンドに焼き込まれた版は `2026.10.0` のままです。概要ページと、言語ファイルの URL は変わりません。
+サーバーは起動時に `/misskey/built/meta.json` を読み、NodeInfo と `/api/meta` と送信時の User-Agent（`Misskey/2026.10.0-A55.4 (サイトのURL)`）に使います。フロントエンドに焼き込まれた版は `2026.10.0` のままです。概要ページと、言語ファイルの URL は変わりません。
 
-`2026.10.0-A55.2` は semver のプレリリースで、比較すると `2026.10.0` より前になります。Misskey は相手のバージョン文字列では機能を切り替えません。配送を止めるのは、管理画面で指定したソフトとバージョン範囲に一致したときだけです。
+`2026.10.0-A55.4` は semver のプレリリースで、比較すると `2026.10.0` より前になります。Misskey は相手のバージョン文字列では機能を切り替えません。配送を止めるのは、管理画面で指定したソフトとバージョン範囲に一致したときだけです。
 
 相手は NodeInfo をキャッシュします。表示が切り替わるのは、相手が次に取りに来たあとです。
 
@@ -110,9 +185,9 @@ update meta set "cacheRemoteFiles" = false, "proxyRemoteFiles" = false,
 
 `example/compose.yml` に PostgreSQL と Redis のメモリ上限を入れています。
 
-- PostgreSQL: `shared_buffers=64MB`, `max_connections=20`, コンテナ上限 384MB
+- PostgreSQL: `shared_buffers=64MB`, `max_connections=20`, `wal_compression=on`, コンテナ上限 384MB
 - Redis: `maxmemory 64mb`, `noeviction`（ジョブを LRU で捨てない）, コンテナ上限 96MB
-- Misskey: ヒープ 400MB、コンテナ上限 768MB
+- Misskey: ヒープ 400MB、IPv4 DNS、`UV_THREADPOOL_SIZE=2`、コンテナ上限 768MB
 
 `example/a55.config.yml` は `default.yml` に貼るジョブ設定です。省略してもイメージ側のフォールバックが同じ値です。明示すると、あとから大きいマシンへ移したときに値の所在が分かります。
 
@@ -124,9 +199,9 @@ TS-233 上でビルドしてください。`@node-rs/bcrypt` のネイティブ�
 
 ```sh
 cd Misskey-A55
-sudo docker build -t misskey/misskey:2026.10.0-a55v2 .
+sudo docker build -t misskey/misskey:2026.10.0-a55v3 .
 
-# docker-compose で image: misskey/misskey:2026.10.0-a55v2 を指定して up
+# docker-compose で image: misskey/misskey:2026.10.0-a55v3 を指定して up
 ```
 
 `example/` に Misskey + PostgreSQL 18 + Redis 7 + cloudflared のテンプレートがあります。`.config` 内のパスワードは自分のものに書き換えてください。

@@ -4,6 +4,7 @@
 
 clusterLimit: 1
 threadPoolSize: 1
+outgoingAddressFamily: ipv4
 
 deliverJobConcurrency: 2
 inboxJobConcurrency: 1
@@ -15,3 +16,9 @@ relationshipJobPerSec: 4
 
 deliverJobMaxAttempts: 4
 inboxJobMaxAttempts: 4
+
+logging:
+  level: warn
+  domains:
+    db.sql: off
+    queue: error

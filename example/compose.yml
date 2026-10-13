@@ -1,6 +1,6 @@
 services:
   web:
-    image: misskey/misskey:2026.10.0-a55
+    image: misskey/misskey:2026.10.0-a55v3
     container_name: misskey-web
     restart: always
     depends_on:
@@ -12,7 +12,8 @@ services:
       - internal_network
       - external_network
     environment:
-      - NODE_OPTIONS=--max-old-space-size=400 --require /misskey/.config/a55-guard.cjs
+      - NODE_OPTIONS=--max-old-space-size=400 --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs
+      - UV_THREADPOOL_SIZE=2
     mem_limit: 768m
     volumes:
       - ./files:/misskey/files
@@ -53,6 +54,18 @@ services:
       - effective_cache_size=256MB
       - -c
       - idle_session_timeout=120s
+      - -c
+      - jit=off
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - max_parallel_workers=0
+      - -c
+      - autovacuum_max_workers=1
+      - -c
+      - wal_compression=on
+      - -c
+      - idle_in_transaction_session_timeout=30s
     mem_limit: 384m
     env_file:
       - .config/docker.env

@@ -16,6 +16,7 @@ dbReplications: false
 redis:
   host: redis
   port: 6379
+  family: 4
 
 fulltextSearch:
   provider: sqlLike
@@ -26,6 +27,7 @@ id: 'aidx'
 # These override the image fallbacks (deliver 2 / inbox 1).
 clusterLimit: 1
 threadPoolSize: 1
+outgoingAddressFamily: ipv4
 deliverJobConcurrency: 2
 deliverJobPerSec: 4
 inboxJobConcurrency: 1
@@ -34,3 +36,9 @@ relationshipJobConcurrency: 2
 relationshipJobPerSec: 4
 deliverJobMaxAttempts: 4
 inboxJobMaxAttempts: 4
+
+logging:
+  level: warn
+  domains:
+    db.sql: off
+    queue: error
