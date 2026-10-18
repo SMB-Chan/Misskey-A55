@@ -258,13 +258,21 @@ v2 の追加:
 docker exec misskey-redis redis-cli lrange smb-chan.dev:a55:events 0 -1   # 履歴を見る
 ```
 
-あわせてデータベースに `idle_session_timeout=120s` を置きます。結果を読み捨てた接続は、ループが生きていれば 2 分で切れ、ジョブがエラーになって次へ進みます。
+~~あわせてデータベースに `idle_session_timeout=120s` を置きます。~~
+**2026-10-18 削除**: この設定がキュー停止事故の根本原因だった。DB がアイドル接続を
+2分で切断すると、Misskey キューの DB プール接続が CLOSE_WAIT の死んだソケット化し、
+libuv のイベントループがカーネル空間で空回りして JS タイマーごと停止する
+（メインスレッド utime=0 のまま stime が 83%/コアで燃え続ける）。kill→再起動→
+2分後に再凍結のループが 26 時間続いた。Web コンテナは同じ設定でも発症しない
+（プール実装が異なるため CLOSE_WAIT が発生しない）。
 
 ```sh
-cp a55-guard.cjs /path/to/misskey/.config/a55-guard.cjs
-# 既存のデータベースに一度だけ
-psql -d misskey -c "ALTER DATABASE misskey SET idle_session_timeout = '120s'"
+# 解除（両方必要。compose 引数と DB レベル設定の二重になっていた）
+# compose の db command から -c idle_session_timeout=120s を削除して up -d db
+psql -d misskey -c "ALTER DATABASE misskey RESET idle_session_timeout"
 ```
+
+`idle_in_transaction_session_timeout=30s` は問題ないので維持する。
 
 ## 注意事項
 

@@ -94,8 +94,6 @@ services:
       - -c
       - effective_cache_size=256MB
       - -c
-      - idle_session_timeout=120s
-      - -c
       - jit=off
       - -c
       - max_parallel_workers_per_gather=0
