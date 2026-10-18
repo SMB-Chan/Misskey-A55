@@ -15,6 +15,11 @@
  * - サーバー（HTTP）は SERVER_STALL_MS（5分）まで許す（web 再起動嵐を防ぐ）
  * - アクティブジョブありは STALL_MS 180s で従来どおり断裁
  *
+ * v5.2: idle 断裁を 600s→180s に戻す。2026-10-18 の実測では再起動は毎回
+ * 15〜25 分の健全稼働を取り戻すのに対し、soft-stall 猶予は凍結窓を
+ * 10〜15 分に広げるだけだった（freeze は自然回復しない）。
+ * HOST_STALL_MS も 900s→300s。
+ *
  * v5.1: ホスト圧迫時の延命と停滞時のスレッド単位採取。
  * - 1分ロードが HOST_PRESSURE_LOAD 以上なら kill を HOST_STALL_MS まで猶予する
  *   （2026-10-18 の切分けで web+queue が同時停滞したのはホスト側圧迫で、
@@ -40,10 +45,10 @@ const { Worker, isMainThread, parentPort, workerData } = require('node:worker_th
 const CONFIG_PATH = process.env.A55_GUARD_CONFIG || '/misskey/.config/default.yml';
 const BREADCRUMB_PATH = process.env.A55_BREADCRUMB_PATH || '/tmp/a55-breadcrumb.txt';
 const STALL_MS = 180000;
-const IDLE_STALL_MS = 600000;
+const IDLE_STALL_MS = 180000;
 const SERVER_STALL_MS = 300000;
 const HOST_PRESSURE_LOAD = 4.5;
-const HOST_STALL_MS = 900000;
+const HOST_STALL_MS = 300000;
 const GRACE_MS = 150000;
 const POISON_STRIKES = 3;
 const QUEUE_NAMES = ['inbox', 'deliver', 'relationship', 'object'];
