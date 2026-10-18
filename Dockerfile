@@ -27,7 +27,7 @@ RUN find /misskey/packages/backend/built -name '*.js' \
 # NodeInfo, /api/meta, and the User-Agent. The frontend bundle keeps 2026.10.0,
 # so locale URLs and the local about page stay on that string.
 # 2026.10.0-A55.4 is a semver pre-release and sorts before 2026.10.0.
-RUN node -e 'const fs=require("node:fs");const p="/misskey/built/meta.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));const ok=["2026.10.0","2026.10.0-A55","2026.10.0-A55.2","2026.10.0-A55.3","2026.10.0-A55.4"];if(!ok.includes(j.version))throw new Error("unexpected meta.version: "+j.version);j.version="2026.10.0-A55.4";fs.writeFileSync(p,JSON.stringify(j));const again=JSON.parse(fs.readFileSync(p,"utf8"));if(again.version!=="2026.10.0-A55.4")throw new Error("meta.json write failed");'
+RUN node -e 'const fs=require("node:fs");const p="/misskey/built/meta.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));const ok=["2026.10.0","2026.10.0-A55","2026.10.0-A55.2","2026.10.0-A55.3","2026.10.0-A55.4","2026.10.0-A55.5"];if(!ok.includes(j.version))throw new Error("unexpected meta.version: "+j.version);j.version="2026.10.0-A55.5";fs.writeFileSync(p,JSON.stringify(j));const again=JSON.parse(fs.readFileSync(p,"utf8"));if(again.version!=="2026.10.0-A55.5")throw new Error("meta.json write failed");'
 
 # The base image preloads jemalloc. Return freed pages sooner and use fewer
 # arenas so the container's resident set stays well under its 768m cap; the

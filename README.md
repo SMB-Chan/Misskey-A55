@@ -20,7 +20,7 @@ NAS 上の `docker build` で適用できます。
 | メモリキャッシュ | `MemoryKVCache` の件数上限を 2048 にする。公開鍵と絵文字は TTL が 12 時間で、件数の天井が無いとヒープが膨らむ。あふれた分は DB から読み直す |
 | ジョブ | 未設定時の並列を配送 2・受信 1・関係 2、レートを 4/秒・2/秒・4/秒、リトライを 4 回にする。**`default.yml` の値はこちらより優先される**（v3 で本番の 16/4 を 2/1 に戻した） |
 | HTTP エージェント | 配送ソケットの下限を 256 から 8 にする |
-| サーバーメトリクス | 「サーバーメトリクス」ウィジェットのデータをログインユーザー限定にする。`serverStats` チャンネルを `requireCredential` 化し、`server-info` は匿名リクエストにプレースホルダ(`?`/`0`)を返す。ウィジェットのラベル取得(`misskeyApiGet`)だけトークン付きに書き換える |
+| サーバーメトリクス | 「サーバーメトリクス」ウィジェットのデータをログインユーザー限定にする。`serverStats` チャンネルを `requireCredential` 化し、`server-info` は匿名リクエストにプレースホルダ(`?`/`0`)を返す。ウィジェットのラベル取得(`misskeyApiGet`)だけトークン付きに書き換える。さらに2秒周期の収集（`ServerStatsService`）を `systeminformation` のサブシェル起動（`lsblk`/`ip` 等で毎回約1.2秒消費）から `/proc/meminfo`・`/proc/net/dev`・`/proc/diskstats` の直接読み取り（0.3ms以下・子プロセス0）に置き換える |
 | ActivityPub | 応答の `max-age` を 30→300 秒、180→1800 秒にする。HTML の外枠と WebFinger も同じ秒数になる。`300` と `31536000` は変えない。Cloudflare の Cache Rule がこれを尊重するとクローラが NAS に届かない |
 | 連合先の表示 | NodeInfo のバージョンを `2026.10.0-A55.4` にする。名前は `misskey` のままなので、相手の画面は `misskey 2026.10.0-A55.4` になる |
 | 未知アカウントの Delete（v2.1） | オブジェクトがアクター自身の URI（文字列でも埋め込みでも）で、そのユーザーが DB に無い Delete は取得も登録もしない。ノート削除は従来どおり |
@@ -32,8 +32,10 @@ NAS 上の `docker build` で適用できます。
 | フォロー収集（v3） | `following` / `followers` コレクションの公開判定 HTTP をしない。プロフィール上は非公開扱い。フォロー自体は従来どおり |
 | インスタンス見た目（v3） | 連合先メタデータは NodeInfo だけ取る。HTML・manifest・favicon の HEAD はしない。ソフト名と版は残る |
 | Webhook 並列（v3） | ユーザー webhook 64→2、システム webhook 16→1。ジョブは同じイベントループ |
-| 外向き IPv4（v3） | `outgoingAddressFamily: ipv4` と `NODE_OPTIONS=--dns-result-order=ipv4first`。QNAP で死にがちな IPv6 待ちを避ける |
+| 外向き IPv4（v3） | `outgoingAddressFamily: ipv4` と `--dns-result-order=ipv4first`。QNAP で死にがちな IPv6 待ちを避ける |
 | libuv（v3） | `UV_THREADPOOL_SIZE=2`。DNS/fs が 4 コアを postgres と取り合うのを抑える |
+| ロール分離＆直接起動 | `web`（`MK_DISABLE_CLUSTERING=1`, `MK_ONLY_SERVER=1`, `cpuset: "0-2"`）と `queue`（`MK_DISABLE_CLUSTERING=1`, `MK_ONLY_QUEUE=1`, `MK_NO_DAEMONS=1`, `cpuset: "3"`）に分離し、`pnpm` ラッパーを介さず `exec node` で1コンテナ1プロセス化する |
+| 同一ユーザー通知の折りたたみ | 短時間（30分以内）に同一ユーザーから連続して届いたリアクション・リノート・フォロー系の通知を自動で1枠に束ね、「`▼ <ユーザー名> からの通知をさらに N 件表示`」ボタンで開閉できるようにする（返信・メンション・引用は折りたたまず常時表示。WebSocketリアルタイム受信にも対応） |
 
 プレースホルダは中性色の固定 blurhash です。投稿画像のぼかしプレビューの色は元画像を反映しません。
 
@@ -199,9 +201,9 @@ TS-233 上でビルドしてください。`@node-rs/bcrypt` のネイティブ�
 
 ```sh
 cd Misskey-A55
-sudo docker build -t misskey/misskey:2026.10.0-a55v3 .
+sudo docker build -t misskey/misskey:2026.10.0-a55v4 .
 
-# docker-compose で image: misskey/misskey:2026.10.0-a55v3 を指定して up
+# docker-compose で image: misskey/misskey:2026.10.0-a55v4 を指定して up
 ```
 
 `example/` に Misskey + PostgreSQL 18 + Redis 7 + cloudflared のテンプレートがあります。`.config` 内のパスワードは自分のものに書き換えてください。
@@ -212,7 +214,35 @@ Misskey はマスタープロセスが HTTP を出し、ワーカー 1 本が受
 
 ループが同期処理で止まると、ノートの受信も配送もそこで止まります。PostgreSQL から見ると接続は `idle` / `ClientRead` のまま残り、Docker のヘルスチェックはマスターの HTTP が応答するので成功します。`entry.ts` は終了したワーカーを fork し直します。止まっているだけで終了していないワーカーは、その対象になりません。
 
-`a55-guard.cjs` を `.config/` に置き、`NODE_OPTIONS` に `--require /misskey/.config/a55-guard.cjs` を足します。起動から 150 秒は起動処理を見送り、その後は別スレッドがイベントループの心拍を見ます。45 秒止まったら、実行中のジョブを Redis の delayed へ退避してから、そのプロセスだけを止めます。Misskey がワーカーを fork し直すので HTTP は続き、受信キューが先に流れます。同じジョブが再び止めた場合は待ち時間を倍にして、最大 1 時間まで後ろへ回します。マスター自身が止まったときはそのプロセスを止め、Docker の再起動に任せます。
+`a55-guard.cjs` を `.config/` に置き、`NODE_OPTIONS` に `--require /misskey/.config/a55-guard.cjs` を足します。起動から 150 秒は起動処理を見送り、その後は別スレッドがイベントループの心拍を見ます。実行中ジョブがある状態で 180 秒止まったら、ジョブを Redis の delayed へ退避してからそのプロセスだけを止めます。ジョブが無い stall は 10 分まで許します（soft-stall を `a55:events` に残す）。HTTP 専用プロセスは 5 分です。Misskey がワーカーを fork し直すので HTTP は続き、受信キューが先に流れます。同じジョブが再び止めた場合は待ち時間を倍にして、最大 1 時間まで後ろへ回します。マスター自身が止まったときはそのプロセスを止め、Docker の再起動に任せます。
+
+v5 の追加:
+
+- **idle 耐性**: `active=none` の stall を即殺しない（`IDLE_STALL_MS=600s`）。TS-233 で観測された 4.5 分周期の再起動嵐（猶予 150s + 旧 STALL 120s）の主因は、swap / 単一コア競合による心拍遅延だった
+- **サーバー閾値**: `SERVER_STALL_MS=300s`。web を巻き込んだ再起動がメモリ圧を悪化させるのを防ぐ
+- **cpuset**: web `0-1` / queue `2-3`。queue に 2 コアを渡し、心拍用の余裕を確保する
+
+v5.1 の追加（2026-10-18 の TL 停止事故対応）:
+
+- **ホスト圧迫時の延命**: 1 分ロードが `HOST_PRESSURE_LOAD`(4.5) 以上なら、idle/server とも
+  kill を `HOST_STALL_MS`(900s) まで猶予する。当日 12:33 JST に web と queue が **2 秒差で
+  同時停滞**（load 6.33）したことから、実行中フリーズの相当部分はホスト側の CPU/IO 圧迫で、
+  kill→再起動のコールドページインが圧迫をさらに悪化させるため
+- **スレッド単位採取**: stall/soft-stall イベントに全スレッドの
+  `state/utime/stime/wchan`（`thr=…`）を残す。次回フリーズで「メインスレッドがユーザ空間で
+  回っているのかカーネル空間で回っているのか」をイベントログだけで判定できる
+
+2026-10-18 の切分け結果（再発時の参考）:
+
+- **公式イメージ `misskey/misskey:2026.10.0` でもキューは正常稼働した**
+  （BullMQ ワーカーのポーリング・inbox 処理・ユーザ fetch すべて確認）。
+  a55 パッチ層・bcrypt ネイティブ化・`MALLOC_CONF`・guard はいずれも実行中フリーズの
+  原因ではない
+- 起動直後の「`utime≈0` のまま `stime` が燃える」現象は **コールドページインの正常動作**
+  （全イメージ共通、ワーカー起動まで 2〜3 分）。フリーズと誤診しないこと
+- Misskey 2026.10.0 のキューは **BullMQ**。キーは `<prefix>:queue:<name>:<name>:*` で
+  ワーカーは `bzpopmin` で待機する。旧 Bull の `<prefix>:<q>:client` キーは存在しないので
+  死活判定に使えない。死活は `redis-cli monitor` で `bzpopmin` を見るのが確実
 
 v2 の追加:
 

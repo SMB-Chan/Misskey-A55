@@ -194,6 +194,42 @@ if (widgetFiles < 20 || widgetFiles > 60) {
 	throw new Error(`expected 20..60 widget chunks, found ${widgetFiles}`);
 }
 
+// Collapse consecutive notifications from the same user within 30 minutes
+// for non-conversational types (reaction, renote, follow, etc.), while
+// keeping reply, quote, and mention always expanded.
+const notifImport = 'import{j as e,pt as t,u as n}from"./2H3Dmt7WI-DHf8Dmep.js";';
+const notifImportPatched = 'import{j as e,pt as t,u as n,g as __a55ref}from"./2H3Dmt7WI-DHf8Dmep.js";/*A55_NOTIF_FOLD*/';
+const notifSetup = 'let $=null;return o(()=>{';
+const notifSetupPatched = 'const __a55exp=__a55ref({}),__a55tog=e=>{__a55exp.value={...__a55exp.value,[e]:!__a55exp.value[e]}},__a55fSet=new Set([`reaction`,`renote`,`follow`,`receiveFollowRequest`,`followRequestAccepted`]),__a55u=e=>{if(!e||!__a55fSet.has(e.type))return null;return e.user??null},__a55g=g(()=>{const l=e(W).items.value,o=[];for(let i=0;i<l.length;i++){const c=l[i],u=__a55u(c),p=o.at(-1);if(u&&p&&p.u&&p.u.id===u.id&&Math.abs(new Date(p.last.createdAt).getTime()-new Date(c.createdAt).getTime())<=18e5){p.extra.push(c);p.last=c;continue}o.push({head:c,last:c,u,extra:[]})}return o});let $=null;return o(()=>{';
+const notifRender = '[(a(!0),v(y,null,te(e(W).items.value,(n,r)=>(a(),v(`div`,{key:n.id,"data-scroll-anchor":n.id,class:`xmufI`},[r>0&&e(j)(e(W).items.value[r-1].createdAt,n.createdAt)?(a(),v(`div`,{key:0,class:`xcnVt`},[x(`span`,null,[o[2]||=x(`i`,{class:`ti ti-chevron-up`},null,-1),f(` `+t(e(k)(e(W).items.value[r-1].createdAt,n.createdAt)?.prevText),1)]),o[4]||=x(`span`,{style:{height:`1em`,width:`1px`,background:`var(--MI_THEME-divider)`}},null,-1),x(`span`,null,[f(t(e(k)(e(W).items.value[r-1].createdAt,n.createdAt)?.nextText)+` `,1),o[3]||=x(`i`,{class:`ti ti-chevron-down`},null,-1)])],2)):h(``,!0),[`reply`,`quote`,`mention`].includes(n.type)&&`note`in n?(a(),m(D,{key:1,class:`x7OW7`,note:n.note,withHardMute:!0},null,8,[`class`,`note`])):(a(),m(F,{key:2,class:`x7OW7`,notification:n,withTime:!0,full:!0},null,8,[`class`,`notification`]))],10,L))),128))]';
+const notifRenderPatched = '[(a(!0),v(y,null,te(e(__a55g),(g,r)=>{const n=g.head;return a(),v(`div`,{key:n.id,"data-scroll-anchor":n.id,class:`xmufI`},[r>0&&e(j)(e(__a55g)[r-1].last.createdAt,n.createdAt)?(a(),v(`div`,{key:0,class:`xcnVt`},[x(`span`,null,[o[2]||=x(`i`,{class:`ti ti-chevron-up`},null,-1),f(` `+t(e(k)(e(__a55g)[r-1].last.createdAt,n.createdAt)?.prevText),1)]),o[4]||=x(`span`,{style:{height:`1em`,width:`1px`,background:`var(--MI_THEME-divider)`}},null,-1),x(`span`,null,[f(t(e(k)(e(__a55g)[r-1].last.createdAt,n.createdAt)?.nextText)+` `,1),o[3]||=x(`i`,{class:`ti ti-chevron-down`},null,-1)])],2)):h(``,!0),[`reply`,`quote`,`mention`].includes(n.type)&&`note`in n?(a(),m(D,{key:1,class:`x7OW7`,note:n.note,withHardMute:!0},null,8,[`class`,`note`])):(a(),m(F,{key:2,class:`x7OW7`,notification:n,withTime:!0,full:!0},null,8,[`class`,`notification`])),g.extra.length>0?(a(),v(`div`,{key:3},[x(`button`,{class:`_button`,style:{width:`100%`,padding:`6px 16px`,fontSize:`0.82em`,opacity:`0.78`,display:`flex`,alignItems:`center`, gap:`6px`,borderTop:`solid 0.5px var(--MI_THEME-divider)`,background:`var(--MI_THEME-bg)`},onClick:()=>__a55tog(n.id)},[x(`i`,{class:e(__a55exp)[n.id]?`ti ti-chevron-up`:`ti ti-chevron-down`}),f(` `+t(g.u?.name||g.u?.username||``)+` からの通知をさらに `+t(g.extra.length)+` 件`+(e(__a55exp)[n.id]?`閉じる`:`表示`),1)]),e(__a55exp)[n.id]?(a(!0),v(y,{key:0},te(g.extra,c=>(a(),v(`div`,{key:c.id,style:{borderTop:`solid 0.5px var(--MI_THEME-divider)`,paddingLeft:`12px`,background:`var(--MI_THEME-bg)`}},[(a(),m(F,{class:`x7OW7`,notification:c,withTime:!0,full:!0},null,8,[`class`,`notification`]))]))),128)):h(``,!0)])):h(``,!0)],10,L)}),128))]';
+
+let notifFiles = 0;
+for (const file of frontFiles) {
+	const src = readFileSync(file, 'utf8');
+	if (!src.includes('MkStreamingNotificationsTimeline')) continue;
+	if (src.includes('/*A55_NOTIF_FOLD*/')) {
+		notifFiles++;
+		continue;
+	}
+	if (!src.includes(notifImport) || !src.includes(notifSetup) || !src.includes(notifRender)) {
+		throw new Error(`notif fold pattern missing in ${file}`);
+	}
+	let next = src
+		.replace(notifImport, notifImportPatched)
+		.replace(notifSetup, notifSetupPatched)
+		.replace(notifRender, notifRenderPatched);
+	if (!next.includes('/*A55_NOTIF_FOLD*/')) {
+		throw new Error(`notif fold patch failed in ${file}`);
+	}
+	writeChecked(file, next);
+	notifFiles++;
+	console.log(`patched notif-fold: ${file.slice(FRONT_DIR.length)}`);
+}
+if (notifFiles < 20 || notifFiles > 60) {
+	throw new Error(`expected 20..60 notif chunks, found ${notifFiles}`);
+}
+
 // getBlurhash decodes the original file before the bundled encoder runs.
 const blurPipeline = '.raw().ensureAlpha().resize(64,64,{fit:`inside`}).toBuffer({resolveWithObject:!0})';
 let blurFiles = 0;
@@ -335,6 +371,15 @@ replaceExact(
 	1,
 );
 
+// Stock inbox throws UnrecoverableError for "skip: ..." so BullMQ parks them
+// in failed (removeOnFail keeps 100). Return the string instead so skips count
+// as completed and stop polluting the failed set / stall forensics.
+replaceExact(
+	'if(s==null)try{s=await this.apDbResolverService.getAuthUserFromApId(we(n.actor))}catch(e){if(e instanceof Ue)throw e.isRetryable?Error(`Error in actor ${we(n.actor)} - ${e.statusCode}`):new Z.UnrecoverableError(`skip: Ignored deleted actors on both ends ${we(n.actor)} - ${e.statusCode}`)}if(s==null)throw new Z.UnrecoverableError(`skip: failed to resolve user ${we(n.actor)}`);',
+	'if(s==null)try{s=await this.apDbResolverService.getAuthUserFromApId(we(n.actor))}catch(e){if(e instanceof Ue){if(e.isRetryable)throw Error(`Error in actor ${we(n.actor)} - ${e.statusCode}`);return`skip: Ignored deleted actors on both ends ${we(n.actor)} - ${e.statusCode}`}}if(s==null)return`skip: failed to resolve user ${we(n.actor)}`;/*A55_SKIP_OK*/',
+	1,
+);
+
 // deleteAccount shares the only worker with inbox. A 100-note delete plus
 // per-file chart updates saturates the A55 long enough for the guard to
 // kill the process, and the job then restarts from the first row. Smaller
@@ -385,6 +430,22 @@ replaceOneOf(
 replaceOneOf(
 	['concurrency:16,limiter:{max:16,duration:1e3}', 'concurrency:16,limiter:{max:16,duration:1000}'],
 	'concurrency:1,limiter:{max:1,duration:1e3}/*A55_WH*/',
+	1,
+);
+
+// ServerStatsService runs every 2s when enableServerMachineStats is true.
+// Stock mem/net/fs call systeminformation, whose disksIO() and networkStats()
+// spawn ~15 shell processes (lsblk|grep|sed|awk, ip route) taking ~1.2s of CPU
+// every 2s on QNAP. Read /proc/meminfo, /proc/net/dev, and /proc/diskstats
+// directly in-process (<0.3ms, zero child processes) and guard overlapping ticks.
+replaceExact(
+	'let tick=async()=>{let t=await cpuUsage(),n=await mem(),r=await net(),i=await fs(),a={cpu:roundCpu(t),mem:{used:round(n.total-n.available),active:round(n.active)},net:{rx:round(Math.max(0,r.rx_sec)),tx:round(Math.max(0,r.tx_sec))},fs:{r:round(Math.max(0,i.rIO_sec??0)),w:round(Math.max(0,i.wIO_sec??0))}};v.emit(`serverStats`,a),e.unshift(a),e.length>200&&e.pop()};',
+	'let __a55tickBusy=!1,tick=async()=>{if(__a55tickBusy)return;__a55tickBusy=!0;try{let t=await cpuUsage(),n=await mem(),r=await net(),i=await fs(),a={cpu:roundCpu(t),mem:{used:round(n.total-n.available),active:round(n.active)},net:{rx:round(Math.max(0,r.rx_sec)),tx:round(Math.max(0,r.tx_sec))},fs:{r:round(Math.max(0,i.rIO_sec??0)),w:round(Math.max(0,i.wIO_sec??0))}};v.emit(`serverStats`,a),e.unshift(a),e.length>200&&e.pop()}finally{__a55tickBusy=!1}};/*A55_PROC_TICK*/',
+	1,
+);
+replaceExact(
+	'async function mem(){return await(await import(`./lib-DKFCcBQX.js`).then(e=>t(e.default,1))).mem()}async function net(){let e=await import(`./lib-DKFCcBQX.js`).then(e=>t(e.default,1)),n=await e.networkInterfaceDefault();return(await e.networkStats(n))[0]}async function fs(){return await(await import(`./lib-DKFCcBQX.js`).then(e=>t(e.default,1))).disksIO().catch(()=>({rIO_sec:0,wIO_sec:0}))}',
+	'let __a55fs,__a55net=null,__a55disk=null;async function mem(){try{let e=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/meminfo`,`utf8`),t=0,n=0,r=0;for(let i of e.split(`\\n`)){let e=i.match(/^(MemTotal|MemAvailable|MemFree):\\s*(\\d+)/);e&&(e[1]===`MemTotal`?t=Number(e[2])*1024:e[1]===`MemAvailable`?n=Number(e[2])*1024:r=Number(e[2])*1024)}let i=n||r;return{total:t,available:i,active:Math.max(0,t-i)}}catch{return{total:0,available:0,active:0}}}async function net(){try{let e=Date.now(),t=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/net/dev`,`utf8`),n=0,r=0;for(let e of t.split(`\\n`)){let t=e.trim().match(/^([a-z0-9]+):\\s*(\\d+)\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+(\\d+)/i);t&&t[1]!==`lo`&&(n+=Number(t[2]),r+=Number(t[3]))}let i=__a55net;if(__a55net={t:e,rx:n,tx:r},!i||e<=i.t)return{rx_sec:0,tx_sec:0};let a=(e-i.t)/1e3;return{rx_sec:(n-i.rx)/a,tx_sec:(r-i.tx)/a}}catch{return{rx_sec:0,tx_sec:0}}}async function fs(){try{let e=Date.now(),t=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/diskstats`,`utf8`),n=0,r=0;for(let e of t.split(`\\n`)){let t=e.trim().match(/^\\d+\\s+\\d+\\s+(sd[a-z]+|nvme\\d+n\\d+)\\s+(\\d+)\\s+\\d+\\s+\\d+\\s+\\d+\\s+(\\d+)/);t&&(n+=Number(t[2]),r+=Number(t[3]))}let i=__a55disk;if(__a55disk={t:e,r:n,w:r},!i||e<=i.t)return{rIO_sec:0,wIO_sec:0};let a=(e-i.t)/1e3;return{rIO_sec:(n-i.r)/a,wIO_sec:(r-i.w)/a}}catch{return{rIO_sec:0,wIO_sec:0}}}/*A55_PROC_STATS*/',
 	1,
 );
 

@@ -5,5 +5,6 @@
 update meta set
   "enableChartsForRemoteUser" = false,
   "enableChartsForFederatedInstances" = false,
+  "enableStatsForFederatedInstances" = false,
   "enableIdenticonGeneration" = false,
   "urlPreviewEnabled" = false;
