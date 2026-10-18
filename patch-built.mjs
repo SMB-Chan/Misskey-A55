@@ -1,4 +1,8 @@
 /**
+ * The TS-233 Misskey. Upstream 2026.10.0 is only the frozen substrate.
+ * Grow this file for that machine: less CPU, less RAM, federation that
+ * returns to the event loop. Do not add features.
+ *
  * Rewrite the Misskey 2026.10.0 production bundle for a 2GB Cortex-A55.
  *
  * bcryptjs and blurhash are inlined by rolldown, so replacing node_modules
@@ -448,6 +452,85 @@ replaceExact(
 	'let __a55fs,__a55net=null,__a55disk=null;async function mem(){try{let e=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/meminfo`,`utf8`),t=0,n=0,r=0;for(let i of e.split(`\\n`)){let e=i.match(/^(MemTotal|MemAvailable|MemFree):\\s*(\\d+)/);e&&(e[1]===`MemTotal`?t=Number(e[2])*1024:e[1]===`MemAvailable`?n=Number(e[2])*1024:r=Number(e[2])*1024)}let i=n||r;return{total:t,available:i,active:Math.max(0,t-i)}}catch{return{total:0,available:0,active:0}}}async function net(){try{let e=Date.now(),t=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/net/dev`,`utf8`),n=0,r=0;for(let e of t.split(`\\n`)){let t=e.trim().match(/^([a-z0-9]+):\\s*(\\d+)\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+(\\d+)/i);t&&t[1]!==`lo`&&(n+=Number(t[2]),r+=Number(t[3]))}let i=__a55net;if(__a55net={t:e,rx:n,tx:r},!i||e<=i.t)return{rx_sec:0,tx_sec:0};let a=(e-i.t)/1e3;return{rx_sec:(n-i.rx)/a,tx_sec:(r-i.tx)/a}}catch{return{rx_sec:0,tx_sec:0}}}async function fs(){try{let e=Date.now(),t=(__a55fs??=await import(`node:fs`)).readFileSync(`/proc/diskstats`,`utf8`),n=0,r=0;for(let e of t.split(`\\n`)){let t=e.trim().match(/^\\d+\\s+\\d+\\s+(sd[a-z]+|nvme\\d+n\\d+)\\s+(\\d+)\\s+\\d+\\s+\\d+\\s+\\d+\\s+(\\d+)/);t&&(n+=Number(t[2]),r+=Number(t[3]))}let i=__a55disk;if(__a55disk={t:e,r:n,w:r},!i||e<=i.t)return{rIO_sec:0,wIO_sec:0};let a=(e-i.t)/1e3;return{rIO_sec:(n-i.r)/a,wIO_sec:(r-i.w)/a}}catch{return{rIO_sec:0,wIO_sec:0}}}/*A55_PROC_STATS*/',
 	1,
 );
+
+// Notes, timelines, and internal events share one Redis channel. The queue
+// only acts on internal events, but it still received every note body.
+// Publish internal events on a second channel and subscribe the queue
+// process to that channel alone. Web keeps the original channel.
+replaceExact(
+	'}publish(e,t,r){let i=t==null?r:r==null?{type:t,body:null}:{type:t,body:r};this.redisForPub.publish(this.config.host,JSON.stringify({channel:e,message:i}))}',
+	'}publish(e,t,r){let i=t==null?r:r==null?{type:t,body:null}:{type:t,body:r},s=JSON.stringify({channel:e,message:i});this.redisForPub.publish(this.config.host,s);e===`internal`&&this.redisForPub.publish(this.config.host+`:a55i`,s)/*A55_PUBSUB*/}',
+	1,
+);
+replaceExact(
+	'return c.subscribe(n.host),c',
+	'return c.subscribe(process.env.MK_ONLY_QUEUE===`1`?n.host+`:a55i`:n.host),c/*A55_PUBSUB*/',
+	1,
+);
+
+// Remote authors each keep a Redis list (user timeline and the files
+// variant). Profile reads already fall back to Postgres. Home timelines
+// of local followers are untouched.
+replaceExact(
+	'this.fanoutTimelineService.push(`userTimeline:${t.id}`,e.id,e.userHost==null?this.meta.perLocalUserUserTimelineCacheMax:this.meta.perRemoteUserUserTimelineCacheMax,r),e.fileIds.length>0&&this.fanoutTimelineService.push(`userTimelineWithFiles:${t.id}`,e.id,e.userHost==null?this.meta.perLocalUserUserTimelineCacheMax/2:this.meta.perRemoteUserUserTimelineCacheMax/2,r)',
+	'e.userHost==null&&(this.fanoutTimelineService.push(`userTimeline:${t.id}`,e.id,this.meta.perLocalUserUserTimelineCacheMax,r),e.fileIds.length>0&&this.fanoutTimelineService.push(`userTimelineWithFiles:${t.id}`,e.id,this.meta.perLocalUserUserTimelineCacheMax/2,r))/*A55_NO_REMOTE_TL*/',
+	1,
+);
+
+// System cron results were kept for 7 days. checkExpiredMutings every 5
+// minutes is about 2,000 Redis hashes, and the worker keeps scoring them.
+replaceExact(
+	'{name:e.name,opts:{removeOnComplete:{age:604800},removeOnFail:{age:604800}}});this.systemQueue.getJobSchedulers()',
+	'{name:e.name,opts:{removeOnComplete:{age:3600,count:8},removeOnFail:{age:3600,count:8}}});this.systemQueue.clean(36e5,5000,`completed`).catch(()=>{}),this.systemQueue.getJobSchedulers()/*A55_SYS_RETAIN*/',
+	1,
+);
+
+// One Redis channel carries every stream. Cache subscribers only act on
+// internal events, so they return before JSON.parse for notes and timelines.
+// uriPersonCache is capped at CACHE_LIMIT. Update matching URIs from the
+// live entries instead of a side index: MemoryKVCache evicts through its
+// private Map, and a second index would both leak and resurrect entries.
+// Upstream: the same two steps in CacheService.onMessage, plus an early
+// return in each redis onMessage.
+replaceExact(
+	'async onMessage(e,t){let r=JSON.parse(t);',
+	'async onMessage(e,t){if(!String(t).startsWith(`{"channel":"internal"`))return;let r=JSON.parse(t);/*A55_INTERNAL_ONLY*/',
+	10,
+);
+replaceExact(
+	'for(let[e,r]of this.uriPersonCache.entries)r.value?.id===t.id&&this.uriPersonCache.delete(e)',
+	'__a55UriTouch(this.uriPersonCache,t.id,null)',
+	1,
+);
+replaceExact(
+	'for(let[t,r]of this.uriPersonCache.entries)r.value?.id===e.id&&this.uriPersonCache.set(t,e)',
+	'__a55UriTouch(this.uriPersonCache,e.id,e)',
+	1,
+);
+const uriTouchHelper = `function __a55UriTouch(cache, id, user) {
+	if (!cache || id == null) return;
+	const matches = [];
+	for (const [key, entry] of cache.entries) {
+		if (entry && entry.value && entry.value.id === id) matches.push(key);
+	}
+	for (const key of matches) {
+		if (user == null) cache.delete(key);
+		else cache.set(key, user);
+	}
+}
+`;
+let helperFiles = 0;
+for (const file of files) {
+	const src = readFileSync(file, 'utf8');
+	if (!src.includes('__a55UriTouch(this.uriPersonCache')) continue;
+	if (src.includes('function __a55UriTouch(')) {
+		helperFiles++;
+		continue;
+	}
+	writeChecked(file, src + '\n' + uriTouchHelper);
+	helperFiles++;
+}
+if (helperFiles !== 1) throw new Error('uri touch helper attached to ' + helperFiles + ' files');
 
 let checked = 0;
 for (const file of touched) {

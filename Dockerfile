@@ -1,3 +1,7 @@
+# TS-233 runtime. The product is this image, not the upstream tag.
+# 2026.10.0 is a frozen substrate. Behavior lives in patch-built.mjs.
+# A newer substrate is a deliberate retarget: the patch build fails closed
+# when a pattern no longer matches.
 FROM misskey/misskey:2026.10.0
 
 USER root
@@ -26,8 +30,8 @@ RUN find /misskey/packages/backend/built -name '*.js' \
 # "misskey". Only built/meta.json changes: config.ts reads it at startup into
 # NodeInfo, /api/meta, and the User-Agent. The frontend bundle keeps 2026.10.0,
 # so locale URLs and the local about page stay on that string.
-# 2026.10.0-A55.4 is a semver pre-release and sorts before 2026.10.0.
-RUN node -e 'const fs=require("node:fs");const p="/misskey/built/meta.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));const ok=["2026.10.0","2026.10.0-A55","2026.10.0-A55.2","2026.10.0-A55.3","2026.10.0-A55.4","2026.10.0-A55.5"];if(!ok.includes(j.version))throw new Error("unexpected meta.version: "+j.version);j.version="2026.10.0-A55.5";fs.writeFileSync(p,JSON.stringify(j));const again=JSON.parse(fs.readFileSync(p,"utf8"));if(again.version!=="2026.10.0-A55.5")throw new Error("meta.json write failed");'
+# 2026.10.0-A55.8 is a semver pre-release and sorts before 2026.10.0.
+RUN node -e 'const fs=require("node:fs");const p="/misskey/built/meta.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));const ok=["2026.10.0","2026.10.0-A55","2026.10.0-A55.2","2026.10.0-A55.3","2026.10.0-A55.4","2026.10.0-A55.5","2026.10.0-A55.6","2026.10.0-A55.7","2026.10.0-A55.8"];if(!ok.includes(j.version))throw new Error("unexpected meta.version: "+j.version);j.version="2026.10.0-A55.8";fs.writeFileSync(p,JSON.stringify(j));const again=JSON.parse(fs.readFileSync(p,"utf8"));if(again.version!=="2026.10.0-A55.8")throw new Error("meta.json write failed");'
 
 # The base image preloads jemalloc. Return freed pages sooner and use fewer
 # arenas so the container's resident set stays well under its 768m cap; the

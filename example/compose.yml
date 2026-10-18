@@ -1,6 +1,6 @@
 services:
   web:
-    image: misskey/misskey:2026.10.0-a55v3
+    image: misskey/misskey:2026.10.0-a55v7
     container_name: misskey-web
     restart: always
     depends_on:
@@ -14,13 +14,13 @@ services:
     command:
       - sh
       - -c
-      - cd /misskey/packages/backend && node ./scripts/compile_config.js && node ./node_modules/typeorm/cli.js migration:run -d ormconfig.js && exec node --max-old-space-size=320 --no-concurrent-marking --no-concurrent-sweeping --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
+      - cd /misskey/packages/backend && node ./scripts/compile_config.js && node ./node_modules/typeorm/cli.js migration:run -d ormconfig.js && exec node --max-old-space-size=320 --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
     environment:
       - MK_DISABLE_CLUSTERING=1
       - MK_ONLY_SERVER=1
       - UV_THREADPOOL_SIZE=2
     mem_limit: 512m
-    cpuset: "0-2"
+    cpuset: "0-1"
     volumes:
       - ./files:/misskey/files
       - ./.config:/misskey/.config:ro
@@ -30,7 +30,7 @@ services:
       retries: 20
 
   queue:
-    image: misskey/misskey:2026.10.0-a55v3
+    image: misskey/misskey:2026.10.0-a55v7
     container_name: misskey-queue
     restart: always
     depends_on:
@@ -46,14 +46,14 @@ services:
     command:
       - sh
       - -c
-      - cd /misskey/packages/backend && node ./scripts/compile_config.js && exec node --max-old-space-size=256 --no-concurrent-marking --no-concurrent-sweeping --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
+      - cd /misskey/packages/backend && node ./scripts/compile_config.js && exec node --max-old-space-size=256 --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
     environment:
       - MK_DISABLE_CLUSTERING=1
       - MK_ONLY_QUEUE=1
       - MK_NO_DAEMONS=1
       - UV_THREADPOOL_SIZE=2
     mem_limit: 448m
-    cpuset: "3"
+    cpuset: "2-3"
     volumes:
       - ./files:/misskey/files
       - ./.config:/misskey/.config:ro
