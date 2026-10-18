@@ -14,7 +14,7 @@ services:
     command:
       - sh
       - -c
-      - cd /misskey/packages/backend && node ./scripts/compile_config.js && node ./node_modules/typeorm/cli.js migration:run -d ormconfig.js && exec node --max-old-space-size=320 --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
+      - cd /misskey/packages/backend && node ./scripts/compile_config.js && node ./node_modules/typeorm/cli.js migration:run -d ormconfig.js && exec node --max-old-space-size=320 --no-concurrent-marking --no-concurrent-sweeping --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
     environment:
       - MK_DISABLE_CLUSTERING=1
       - MK_ONLY_SERVER=1
@@ -46,7 +46,7 @@ services:
     command:
       - sh
       - -c
-      - cd /misskey/packages/backend && node ./scripts/compile_config.js && exec node --max-old-space-size=256 --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
+      - cd /misskey/packages/backend && node ./scripts/compile_config.js && exec node --max-old-space-size=256 --no-concurrent-marking --no-concurrent-sweeping --dns-result-order=ipv4first --require /misskey/.config/a55-guard.cjs ./built/entry.js
     environment:
       - MK_DISABLE_CLUSTERING=1
       - MK_ONLY_QUEUE=1
